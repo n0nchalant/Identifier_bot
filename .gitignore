@@ -1,0 +1,9 @@
+# Never upload your token to GitHub
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
