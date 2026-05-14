@@ -8,8 +8,8 @@ import asyncpg
 # ─────────────────────────────────────────────
 #  Re-roll range (min/max messages after trigger)
 # ─────────────────────────────────────────────
-REROLL_MIN = 50
-REROLL_MAX = 500
+REROLL_MIN = 500
+REROLL_MAX = 800
 
 # ─────────────────────────────────────────────
 #  Bot setup
@@ -266,7 +266,7 @@ async def bot_help(ctx):
         ("!edittrigger #channel N phrase", "Update an existing trigger."),
         ("!listtriggers",                  "Show all triggers with live progress."),
         ("!resetcounter #channel",         "Reset the message counter for a channel."),
-        ("!bothelp",                       "Show this help message. (No permission needed)"),
+        ("!bothelp",                       "Show this help message."),
     ]
     for name, desc in cmds:
         embed.add_field(name=f"`{name}`", value=desc, inline=False)
