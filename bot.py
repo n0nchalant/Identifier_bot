@@ -31,7 +31,7 @@ next_counts = {}
 # ─────────────────────────────────────────────
 async def get_db():
     """Create a single connection using the DATABASE_URL env var (set by Railway)."""
-    return await asyncpg.connect(os.environ["DATABASE_URL"])
+    return await asyncpg.connect(os.environ["DATABASE_URL"], ssl="require")
 
 
 async def setup_db():
