@@ -138,6 +138,62 @@ async def db_remove_reaction(keyword: str):
 
 
 # ─────────────────────────────────────────────
+#  Database helpers  —  custom commands
+# ─────────────────────────────────────────────
+async def setup_custom_commands_db():
+    """
+    Each custom command has:
+      - name       : the trigger word (e.g. "rules" → user types _rules)
+      - text       : optional text response
+      - media_url  : optional image/video/file URL (Discord CDN link)
+    """
+    conn = await get_db()
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS custom_commands (
+            name       TEXT PRIMARY KEY,
+            text       TEXT,
+            media_url  TEXT
+        )
+    """)
+    await conn.close()
+
+
+async def db_get_custom_command(name: str):
+    conn = await get_db()
+    row = await conn.fetchrow(
+        "SELECT * FROM custom_commands WHERE name = $1", name.lower()
+    )
+    await conn.close()
+    return row
+
+
+async def db_get_all_custom_commands():
+    conn = await get_db()
+    rows = await conn.fetch("SELECT * FROM custom_commands ORDER BY name")
+    await conn.close()
+    return rows
+
+
+async def db_save_custom_command(name: str, text: str | None, media_url: str | None):
+    conn = await get_db()
+    await conn.execute("""
+        INSERT INTO custom_commands (name, text, media_url)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (name) DO UPDATE SET text = $2, media_url = $3
+    """, name.lower(), text, media_url)
+    await conn.close()
+
+
+async def db_delete_custom_command(name: str):
+    conn = await get_db()
+    result = await conn.execute(
+        "DELETE FROM custom_commands WHERE name = $1", name.lower()
+    )
+    await conn.close()
+    return result
+
+
+# ─────────────────────────────────────────────
 #  Reaction checker  (called from on_message)
 # ─────────────────────────────────────────────
 async def handle_reactions(message: discord.Message):
@@ -153,6 +209,41 @@ async def handle_reactions(message: discord.Message):
 
 
 # ─────────────────────────────────────────────
+#  Custom command handler  (called from on_message)
+# ─────────────────────────────────────────────
+async def handle_custom_commands(message: discord.Message):
+    """
+    Check if the message is a custom command (e.g. _rules)
+    and reply with the stored text and/or media.
+    """
+    if not message.content.startswith("_"):
+        return
+
+    # Extract the command name (first word after the prefix, lowercased)
+    cmd_name = message.content[1:].split()[0].lower()
+
+    # Skip built-in bot commands so they still work normally
+    if cmd_name in bot.all_commands:
+        return
+
+    row = await db_get_custom_command(cmd_name)
+    if not row:
+        return
+
+    text      = row["text"]
+    media_url = row["media_url"]
+
+    # Build the reply
+    if text and media_url:
+        await message.channel.send(content=text)
+        await message.channel.send(media_url)
+    elif text:
+        await message.channel.send(content=text)
+    elif media_url:
+        await message.channel.send(media_url)
+
+
+# ─────────────────────────────────────────────
 #  Events
 # ─────────────────────────────────────────────
 @bot.event
@@ -162,6 +253,7 @@ async def on_ready():
 
     await setup_db()
     await setup_reactions_db()
+    await setup_custom_commands_db()
 
     rows = await db_get_all_triggers()
     for row in rows:
@@ -172,6 +264,11 @@ async def on_ready():
         cname = channel.name if channel else f"ID {cid}"
         print(f"📡  Watching  #{cname}  ─  next trigger in {row['next_count']} messages")
 
+    # Print all registered custom commands
+    cmds = await db_get_all_custom_commands()
+    for c in cmds:
+        print(f"💬  Custom command: _{c['name']}")
+
     print("─" * 40)
 
 
@@ -181,6 +278,7 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
+    # ── Message counter trigger ──
     cid = message.channel.id
     trigger = await db_get_trigger(cid)
 
@@ -199,7 +297,12 @@ async def on_message(message):
             print(f"🎲  Re-rolled #{message.channel.name}  ─  next trigger in {new_target} messages")
             await message.channel.send(trigger["custom_message"])
 
+    # ── Keyword reactions ──
     await handle_reactions(message)
+
+    # ── Custom commands ──
+    await handle_custom_commands(message)
+
     await bot.process_commands(message)
 
 
@@ -354,6 +457,111 @@ async def list_reactions_cmd(ctx):
 
 
 # ─────────────────────────────────────────────
+#  Commands  —  custom commands
+# ─────────────────────────────────────────────
+@bot.command(name="addcmd")
+@commands.has_permissions(administrator=True)
+async def add_custom_cmd(ctx, name: str, *, text: str = ""):
+    """
+    Create a custom command that replies with text and/or an attached file.
+    Attach an image/video/file to the message to include media.
+
+    Usage (text only):      _addcmd rules Please read the rules!
+    Usage (media only):     _addcmd meme   [attach image, no text needed]
+    Usage (text + media):   _addcmd welcome Hello! [attach image]
+    """
+    name = name.lower()
+
+    # Check the name doesn't clash with a built-in command
+    if name in bot.all_commands:
+        await ctx.send(f"❌  `_{name}` is a built-in command and cannot be overridden.")
+        return
+
+    # Grab attachment URL if a file was uploaded with the command
+    media_url = None
+    if ctx.message.attachments:
+        media_url = ctx.message.attachments[0].url
+
+    if not text and not media_url:
+        await ctx.send("❌  Provide some text and/or attach a file.")
+        return
+
+    await db_save_custom_command(name, text or None, media_url)
+
+    embed = discord.Embed(title="✅  Custom Command Saved", color=discord.Color.green())
+    embed.add_field(name="Command", value=f"`_{name}`", inline=True)
+    if text:
+        embed.add_field(name="Text", value=text[:200], inline=False)
+    if media_url:
+        embed.add_field(name="Media", value="✅ Attachment saved", inline=True)
+    embed.set_footer(text=f"Anyone can now use _{name} to trigger this response.")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="removecmd")
+@commands.has_permissions(administrator=True)
+async def remove_custom_cmd(ctx, name: str):
+    """Delete a custom command.
+    Usage: _removecmd rules
+    """
+    result = await db_delete_custom_command(name)
+    if result == "DELETE 0":
+        await ctx.send(f"⚠️  No custom command found with name `_{name}`.")
+        return
+    await ctx.send(f"🗑️  Custom command `_{name}` deleted.")
+
+
+@bot.command(name="listcmds")
+async def list_custom_cmds(ctx):
+    """List all custom commands. Available to everyone."""
+    rows = await db_get_all_custom_commands()
+    if not rows:
+        await ctx.send("📭  No custom commands created yet. Admins can use `_addcmd` to add one.")
+        return
+
+    embed = discord.Embed(title="📋  Custom Commands", color=discord.Color.blurple())
+    for row in rows:
+        parts = []
+        if row["text"]:
+            parts.append("📝 Text")
+        if row["media_url"]:
+            parts.append("🖼️ Media")
+        embed.add_field(name=f"`_{row['name']}`", value=" + ".join(parts), inline=True)
+    embed.set_footer(text="Type the command to use it!")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="editcmd")
+@commands.has_permissions(administrator=True)
+async def edit_custom_cmd(ctx, name: str, *, text: str = ""):
+    """
+    Edit an existing custom command. Attach a new file to replace media.
+    Usage: _editcmd rules Updated rules text here  [optionally attach new image]
+    """
+    name = name.lower()
+    existing = await db_get_custom_command(name)
+    if not existing:
+        await ctx.send(f"⚠️  No custom command `_{name}` found. Use `_addcmd` to create it.")
+        return
+
+    media_url = existing["media_url"]  # keep old media by default
+    if ctx.message.attachments:
+        media_url = ctx.message.attachments[0].url  # replace with new attachment
+
+    new_text = text or existing["text"]  # keep old text if none provided
+
+    await db_save_custom_command(name, new_text, media_url)
+
+    embed = discord.Embed(title="✏️  Custom Command Updated", color=discord.Color.blue())
+    embed.add_field(name="Command", value=f"`_{name}`", inline=True)
+    if new_text:
+        embed.add_field(name="Text", value=new_text[:200], inline=False)
+    if media_url:
+        embed.add_field(name="Media", value="✅ Saved", inline=True)
+    await ctx.send(embed=embed)
+
+
+# ─────────────────────────────────────────────
 #  Help
 # ─────────────────────────────────────────────
 @bot.command(name="help")
@@ -362,26 +570,34 @@ async def bot_help(ctx):
     embed = discord.Embed(
         title="🤖  Bot Commands",
         color=discord.Color.gold(),
-        description="All commands require **Administrator** permission."
+        description="🔒 = Admin only   |   🌐 = Everyone"
     )
+
     embed.add_field(name="​", value="**── Message Triggers ──**", inline=False)
-    trigger_cmds = [
-        ("_addtrigger #channel N phrase",  "Send *phrase* every N messages in *channel*."),
-        ("_removetrigger #channel",        "Delete the trigger for a channel."),
-        ("_edittrigger #channel N phrase", "Update an existing trigger."),
-        ("_listtriggers",                  "Show all triggers with live progress."),
-        ("_resetcounter #channel",         "Reset the message counter for a channel."),
-    ]
-    for name, desc in trigger_cmds:
+    for name, desc in [
+        ("_addtrigger #ch N phrase",   "🔒 Send phrase every N messages in a channel."),
+        ("_removetrigger #ch",         "🔒 Remove a channel trigger."),
+        ("_edittrigger #ch N phrase",  "🔒 Edit an existing trigger."),
+        ("_listtriggers",              "🔒 Show all triggers with progress."),
+        ("_resetcounter #ch",          "🔒 Reset a channel's message counter."),
+    ]:
         embed.add_field(name=f"`{name}`", value=desc, inline=False)
 
     embed.add_field(name="​", value="**── Keyword Reactions ──**", inline=False)
-    reaction_cmds = [
-        ("_addreaction emoji keyword",  "React with emoji whenever keyword appears in a message."),
-        ("_removereaction keyword",     "Remove a reaction rule."),
-        ("_listreactions",              "List all reaction rules."),
-    ]
-    for name, desc in reaction_cmds:
+    for name, desc in [
+        ("_addreaction emoji keyword", "🔒 React with emoji when keyword is seen."),
+        ("_removereaction keyword",    "🔒 Remove a reaction rule."),
+        ("_listreactions",             "🔒 List all reaction rules."),
+    ]:
+        embed.add_field(name=f"`{name}`", value=desc, inline=False)
+
+    embed.add_field(name="​", value="**── Custom Commands ──**", inline=False)
+    for name, desc in [
+        ("_addcmd name [text]",  "🔒 Create a command. Attach image/video for media."),
+        ("_editcmd name [text]", "🔒 Edit a command. Attach new file to replace media."),
+        ("_removecmd name",      "🔒 Delete a custom command."),
+        ("_listcmds",            "🌐 List all custom commands."),
+    ]:
         embed.add_field(name=f"`{name}`", value=desc, inline=False)
 
     await ctx.send(embed=embed)
