@@ -197,7 +197,7 @@ async def edit_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase:
     """Usage: _edittrigger #channel 100 New message here!"""
     existing = await db_get_trigger(channel.id)
     if not existing:
-        await ctx.send(f"⚠️  No trigger found for {channel.mention}. Use `!addtrigger` first.")
+        await ctx.send(f"⚠️  No trigger found for {channel.mention}. Use `_addtrigger` first.")
         return
 
     await db_update_trigger(channel.id, count, phrase)
