@@ -4,6 +4,7 @@ import os
 import asyncio
 import random
 import asyncpg
+import re
 
 # ─────────────────────────────────────────────
 #  Re-roll range (min/max messages after trigger)
@@ -193,15 +194,77 @@ async def db_delete_custom_command(name: str):
     return result
 
 
+
+# ─────────────────────────────────────────────
+#  Database helpers  —  allowed roles
+# ─────────────────────────────────────────────
+async def setup_roles_db():
+    conn = await get_db()
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS allowed_roles (
+            role_id BIGINT PRIMARY KEY
+        )
+    """)
+    await conn.close()
+
+
+async def db_get_allowed_roles():
+    conn = await get_db()
+    rows = await conn.fetch("SELECT role_id FROM allowed_roles")
+    await conn.close()
+    return [row["role_id"] for row in rows]
+
+
+async def db_add_allowed_role(role_id: int):
+    conn = await get_db()
+    await conn.execute(
+        "INSERT INTO allowed_roles (role_id) VALUES ($1) ON CONFLICT DO NOTHING",
+        role_id
+    )
+    await conn.close()
+
+
+async def db_remove_allowed_role(role_id: int):
+    conn = await get_db()
+    result = await conn.execute(
+        "DELETE FROM allowed_roles WHERE role_id = $1", role_id
+    )
+    await conn.close()
+    return result
+
+
+# ─────────────────────────────────────────────
+#  Permission check
+#  Passes if user is Administrator OR has an allowed role.
+#  If no allowed roles are set, only Administrators can use commands.
+# ─────────────────────────────────────────────
+async def has_bot_permission(member: discord.Member) -> bool:
+    if member.guild_permissions.administrator:
+        return True
+    allowed = await db_get_allowed_roles()
+    if not allowed:
+        return False
+    member_role_ids = [r.id for r in member.roles]
+    return any(rid in allowed for rid in member_role_ids)
+
+
+def bot_permission_check():
+    """Use this decorator instead of @commands.has_permissions(administrator=True)."""
+    async def predicate(ctx):
+        if await has_bot_permission(ctx.author):
+            return True
+        raise commands.CheckFailure("no_permission")
+    return commands.check(predicate)
+
 # ─────────────────────────────────────────────
 #  Reaction checker  (called from on_message)
 # ─────────────────────────────────────────────
 async def handle_reactions(message: discord.Message):
-    """Check message text against all keyword→emoji rules and react."""
     rows = await db_get_all_reactions()
     content_lower = message.content.lower()
     for row in rows:
-        if row["keyword"] in content_lower:
+        pattern = r'\b' + re.escape(row["keyword"]) + r'\b'
+        if re.search(pattern, content_lower):
             try:
                 await message.add_reaction(row["emoji"])
             except discord.HTTPException:
@@ -254,6 +317,7 @@ async def on_ready():
     await setup_db()
     await setup_reactions_db()
     await setup_custom_commands_db()
+    await setup_roles_db()
 
     rows = await db_get_all_triggers()
     for row in rows:
@@ -307,10 +371,57 @@ async def on_message(message):
 
 
 # ─────────────────────────────────────────────
+#  Commands  —  role management
+#  Only Administrators can add/remove allowed roles
+# ─────────────────────────────────────────────
+@bot.command(name="addrole")
+@commands.has_permissions(administrator=True)
+async def add_allowed_role(ctx, role: discord.Role):
+    """Allow a role to use bot commands.
+    Usage: _addrole @Moderator
+    """
+    await db_add_allowed_role(role.id)
+    embed = discord.Embed(title="✅  Role Added", color=discord.Color.green())
+    embed.add_field(name="Role", value=role.mention, inline=True)
+    embed.set_footer(text="Members with this role can now use bot commands.")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="removerole")
+@commands.has_permissions(administrator=True)
+async def remove_allowed_role(ctx, role: discord.Role):
+    """Remove a role from bot command access.
+    Usage: _removerole @Moderator
+    """
+    result = await db_remove_allowed_role(role.id)
+    if result == "DELETE 0":
+        await ctx.send(f"⚠️  {role.mention} is not in the allowed roles list.")
+        return
+    await ctx.send(f"🗑️  {role.mention} removed from allowed roles.")
+
+
+@bot.command(name="listroles")
+@commands.has_permissions(administrator=True)
+async def list_allowed_roles(ctx):
+    """List all roles that can use bot commands."""
+    allowed = await db_get_allowed_roles()
+    if not allowed:
+        await ctx.send("📭  No roles set — only Administrators can use commands.")
+        return
+    embed = discord.Embed(title="🔑  Allowed Roles", color=discord.Color.blurple())
+    roles_text = []
+    for rid in allowed:
+        role = ctx.guild.get_role(rid)
+        roles_text.append(role.mention if role else f"Unknown role ({rid})")
+    embed.description = "\n".join(roles_text)
+    await ctx.send(embed=embed)
+
+
+# ─────────────────────────────────────────────
 #  Commands  —  triggers
 # ─────────────────────────────────────────────
 @bot.command(name="addtrigger")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def add_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: str):
     """Usage: _addtrigger #channel 50 Hello everyone!"""
     existing = await db_get_trigger(channel.id)
@@ -338,7 +449,7 @@ async def add_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: 
 
 
 @bot.command(name="removetrigger")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def remove_trigger(ctx, channel: discord.TextChannel):
     """Usage: _removetrigger #channel"""
     result = await db_remove_trigger(channel.id)
@@ -352,7 +463,7 @@ async def remove_trigger(ctx, channel: discord.TextChannel):
 
 
 @bot.command(name="edittrigger")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def edit_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: str):
     """Usage: _edittrigger #channel 100 New message here!"""
     existing = await db_get_trigger(channel.id)
@@ -373,7 +484,7 @@ async def edit_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase:
 
 
 @bot.command(name="listtriggers")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def list_triggers(ctx):
     """List all active triggers."""
     rows = await db_get_all_triggers()
@@ -402,7 +513,7 @@ async def list_triggers(ctx):
 
 
 @bot.command(name="resetcounter")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def reset_counter(ctx, channel: discord.TextChannel):
     """Usage: _resetcounter #channel"""
     counters[channel.id] = 0
@@ -416,7 +527,7 @@ async def reset_counter(ctx, channel: discord.TextChannel):
 #  Commands  —  reactions
 # ─────────────────────────────────────────────
 @bot.command(name="addreaction")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def add_reaction_cmd(ctx, emoji: str, *, keyword: str):
     """React with an emoji whenever a keyword appears in a message.
     Usage: _addreaction 👍 good job
@@ -430,7 +541,7 @@ async def add_reaction_cmd(ctx, emoji: str, *, keyword: str):
 
 
 @bot.command(name="removereaction")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def remove_reaction_cmd(ctx, *, keyword: str):
     """Remove a keyword reaction rule.
     Usage: _removereaction good job
@@ -443,7 +554,7 @@ async def remove_reaction_cmd(ctx, *, keyword: str):
 
 
 @bot.command(name="listreactions")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def list_reactions_cmd(ctx):
     """List all keyword→emoji reaction rules."""
     rows = await db_get_all_reactions()
@@ -460,7 +571,7 @@ async def list_reactions_cmd(ctx):
 #  Commands  —  custom commands
 # ─────────────────────────────────────────────
 @bot.command(name="addcmd")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def add_custom_cmd(ctx, name: str, *, text: str = ""):
     """
     Create a custom command that replies with text and/or an attached file.
@@ -499,7 +610,7 @@ async def add_custom_cmd(ctx, name: str, *, text: str = ""):
 
 
 @bot.command(name="removecmd")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def remove_custom_cmd(ctx, name: str):
     """Delete a custom command.
     Usage: _removecmd rules
@@ -532,7 +643,7 @@ async def list_custom_cmds(ctx):
 
 
 @bot.command(name="editcmd")
-@commands.has_permissions(administrator=True)
+@bot_permission_check()
 async def edit_custom_cmd(ctx, name: str, *, text: str = ""):
     """
     Edit an existing custom command. Attach a new file to replace media.
@@ -570,32 +681,40 @@ async def bot_help(ctx):
     embed = discord.Embed(
         title="🤖  Bot Commands",
         color=discord.Color.gold(),
-        description="🔒 = Admin only   |   🌐 = Everyone"
+        description="🔒 = Admin only   |   🔑 = Admin or allowed role   |   🌐 = Everyone"
     )
+
+    embed.add_field(name="​", value="**── Role Management ──**", inline=False)
+    for name, desc in [
+        ("_addrole @role",    "🔒 Allow a role to use bot commands."),
+        ("_removerole @role", "🔒 Remove a role from bot access."),
+        ("_listroles",        "🔒 List all allowed roles."),
+    ]:
+        embed.add_field(name=f"`{name}`", value=desc, inline=False)
 
     embed.add_field(name="​", value="**── Message Triggers ──**", inline=False)
     for name, desc in [
-        ("_addtrigger #ch N phrase",   "🔒 Send phrase every N messages in a channel."),
-        ("_removetrigger #ch",         "🔒 Remove a channel trigger."),
-        ("_edittrigger #ch N phrase",  "🔒 Edit an existing trigger."),
-        ("_listtriggers",              "🔒 Show all triggers with progress."),
-        ("_resetcounter #ch",          "🔒 Reset a channel's message counter."),
+        ("_addtrigger #ch N phrase",   "🔑 Send phrase every N messages in a channel."),
+        ("_removetrigger #ch",         "🔑 Remove a channel trigger."),
+        ("_edittrigger #ch N phrase",  "🔑 Edit an existing trigger."),
+        ("_listtriggers",              "🔑 Show all triggers with progress."),
+        ("_resetcounter #ch",          "🔑 Reset a channel's message counter."),
     ]:
         embed.add_field(name=f"`{name}`", value=desc, inline=False)
 
     embed.add_field(name="​", value="**── Keyword Reactions ──**", inline=False)
     for name, desc in [
-        ("_addreaction emoji keyword", "🔒 React with emoji when keyword is seen."),
-        ("_removereaction keyword",    "🔒 Remove a reaction rule."),
-        ("_listreactions",             "🔒 List all reaction rules."),
+        ("_addreaction emoji keyword", "🔑 React with emoji when keyword is seen."),
+        ("_removereaction keyword",    "🔑 Remove a reaction rule."),
+        ("_listreactions",             "🔑 List all reaction rules."),
     ]:
         embed.add_field(name=f"`{name}`", value=desc, inline=False)
 
     embed.add_field(name="​", value="**── Custom Commands ──**", inline=False)
     for name, desc in [
-        ("_addcmd name [text]",  "🔒 Create a command. Attach image/video for media."),
-        ("_editcmd name [text]", "🔒 Edit a command. Attach new file to replace media."),
-        ("_removecmd name",      "🔒 Delete a custom command."),
+        ("_addcmd name [text]",  "🔑 Create a command. Attach image/video for media."),
+        ("_editcmd name [text]", "🔑 Edit a command. Attach new file to replace media."),
+        ("_removecmd name",      "🔑 Delete a custom command."),
         ("_listcmds",            "🌐 List all custom commands."),
     ]:
         embed.add_field(name=f"`{name}`", value=desc, inline=False)
@@ -608,7 +727,11 @@ async def bot_help(ctx):
 # ─────────────────────────────────────────────
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
+    if isinstance(error, commands.CommandNotFound):
+        return  # custom commands handle unknown commands, ignore this
+    if isinstance(error, commands.CheckFailure):
+        await ctx.send("🚫  You don't have permission to use that command.")
+    elif isinstance(error, commands.MissingPermissions):
         await ctx.send("🚫  You need **Administrator** permission to use that command.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"❌  Missing argument: `{error.param.name}`. Type `_help` for usage.")
