@@ -8,8 +8,8 @@ import asyncpg
 # ─────────────────────────────────────────────
 #  Re-roll range (min/max messages after trigger)
 # ─────────────────────────────────────────────
-REROLL_MIN = 50
-REROLL_MAX = 500
+REROLL_MIN = 500
+REROLL_MAX = 800
 
 # ─────────────────────────────────────────────
 #  Bot setup
@@ -18,7 +18,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.messages = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="_", intents=intents, help_command=None)
 
 # In-memory counters (reset on restart, that's fine)
 # { channel_id: current_count }
@@ -27,15 +27,13 @@ counters = {}
 next_counts = {}
 
 # ─────────────────────────────────────────────
-#  Database helpers
+#  Database helpers  —  triggers
 # ─────────────────────────────────────────────
 async def get_db():
-    """Create a single connection using the DATABASE_URL env var (set by Railway)."""
     return await asyncpg.connect(os.environ["DATABASE_URL"])
 
 
 async def setup_db():
-    """Create the triggers table if it doesn't exist yet."""
     conn = await get_db()
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS triggers (
@@ -75,7 +73,7 @@ async def db_remove_trigger(channel_id: int):
     conn = await get_db()
     result = await conn.execute("DELETE FROM triggers WHERE channel_id = $1", channel_id)
     await conn.close()
-    return result  # "DELETE 1" or "DELETE 0"
+    return result
 
 
 async def db_update_trigger(channel_id: int, message_count: int, custom_message: str):
@@ -98,6 +96,63 @@ async def db_update_next_count(channel_id: int, next_count: int):
 
 
 # ─────────────────────────────────────────────
+#  Database helpers  —  reactions
+# ─────────────────────────────────────────────
+async def setup_reactions_db():
+    conn = await get_db()
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS reactions (
+            id      SERIAL PRIMARY KEY,
+            keyword TEXT   NOT NULL,
+            emoji   TEXT   NOT NULL,
+            UNIQUE(keyword)
+        )
+    """)
+    await conn.close()
+
+
+async def db_get_all_reactions():
+    conn = await get_db()
+    rows = await conn.fetch("SELECT * FROM reactions ORDER BY id")
+    await conn.close()
+    return rows
+
+
+async def db_add_reaction(keyword: str, emoji: str):
+    conn = await get_db()
+    await conn.execute(
+        "INSERT INTO reactions (keyword, emoji) VALUES ($1, $2) "
+        "ON CONFLICT (keyword) DO UPDATE SET emoji = $2",
+        keyword.lower(), emoji
+    )
+    await conn.close()
+
+
+async def db_remove_reaction(keyword: str):
+    conn = await get_db()
+    result = await conn.execute(
+        "DELETE FROM reactions WHERE keyword = $1", keyword.lower()
+    )
+    await conn.close()
+    return result
+
+
+# ─────────────────────────────────────────────
+#  Reaction checker  (called from on_message)
+# ─────────────────────────────────────────────
+async def handle_reactions(message: discord.Message):
+    """Check message text against all keyword→emoji rules and react."""
+    rows = await db_get_all_reactions()
+    content_lower = message.content.lower()
+    for row in rows:
+        if row["keyword"] in content_lower:
+            try:
+                await message.add_reaction(row["emoji"])
+            except discord.HTTPException:
+                print(f"⚠️  Could not react with {row['emoji']} — invalid emoji?")
+
+
+# ─────────────────────────────────────────────
 #  Events
 # ─────────────────────────────────────────────
 @bot.event
@@ -106,6 +161,7 @@ async def on_ready():
     print("─" * 40)
 
     await setup_db()
+    await setup_reactions_db()
 
     rows = await db_get_all_triggers()
     for row in rows:
@@ -143,21 +199,22 @@ async def on_message(message):
             print(f"🎲  Re-rolled #{message.channel.name}  ─  next trigger in {new_target} messages")
             await message.channel.send(trigger["custom_message"])
 
+    await handle_reactions(message)
     await bot.process_commands(message)
 
 
 # ─────────────────────────────────────────────
-#  Commands
+#  Commands  —  triggers
 # ─────────────────────────────────────────────
 @bot.command(name="addtrigger")
 @commands.has_permissions(administrator=True)
 async def add_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: str):
-    """Usage: !addtrigger #channel 50 Hello everyone!"""
+    """Usage: _addtrigger #channel 50 Hello everyone!"""
     existing = await db_get_trigger(channel.id)
     if existing:
         await ctx.send(
             f"⚠️  A trigger for {channel.mention} already exists. "
-            f"Remove it first with `!removetrigger`."
+            f"Remove it first with `_removetrigger`."
         )
         return
 
@@ -180,7 +237,7 @@ async def add_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: 
 @bot.command(name="removetrigger")
 @commands.has_permissions(administrator=True)
 async def remove_trigger(ctx, channel: discord.TextChannel):
-    """Usage: !removetrigger #channel"""
+    """Usage: _removetrigger #channel"""
     result = await db_remove_trigger(channel.id)
     if result == "DELETE 0":
         await ctx.send(f"⚠️  No trigger found for {channel.mention}.")
@@ -194,10 +251,10 @@ async def remove_trigger(ctx, channel: discord.TextChannel):
 @bot.command(name="edittrigger")
 @commands.has_permissions(administrator=True)
 async def edit_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: str):
-    """Usage: !edittrigger #channel 100 New message here!"""
+    """Usage: _edittrigger #channel 100 New message here!"""
     existing = await db_get_trigger(channel.id)
     if not existing:
-        await ctx.send(f"⚠️  No trigger found for {channel.mention}. Use `!addtrigger` first.")
+        await ctx.send(f"⚠️  No trigger found for {channel.mention}. Use `_addtrigger` first.")
         return
 
     await db_update_trigger(channel.id, count, phrase)
@@ -219,7 +276,7 @@ async def list_triggers(ctx):
     rows = await db_get_all_triggers()
 
     if not rows:
-        await ctx.send("📭  No triggers configured yet. Use `!addtrigger` to add one.")
+        await ctx.send("📭  No triggers configured yet. Use `_addtrigger` to add one.")
         return
 
     embed = discord.Embed(title="📋  Active Triggers", color=discord.Color.blurple())
@@ -244,7 +301,7 @@ async def list_triggers(ctx):
 @bot.command(name="resetcounter")
 @commands.has_permissions(administrator=True)
 async def reset_counter(ctx, channel: discord.TextChannel):
-    """Usage: !resetcounter #channel"""
+    """Usage: _resetcounter #channel"""
     counters[channel.id] = 0
     new_target = random.randint(REROLL_MIN, REROLL_MAX)
     next_counts[channel.id] = new_target
@@ -252,24 +309,81 @@ async def reset_counter(ctx, channel: discord.TextChannel):
     await ctx.send(f"🔄  Counter for {channel.mention} reset. Next trigger in **{new_target}** messages.")
 
 
-@bot.command(name="bothelp")
+# ─────────────────────────────────────────────
+#  Commands  —  reactions
+# ─────────────────────────────────────────────
+@bot.command(name="addreaction")
+@commands.has_permissions(administrator=True)
+async def add_reaction_cmd(ctx, emoji: str, *, keyword: str):
+    """React with an emoji whenever a keyword appears in a message.
+    Usage: _addreaction 👍 good job
+    """
+    await db_add_reaction(keyword, emoji)
+    embed = discord.Embed(title="✅  Reaction Rule Added", color=discord.Color.green())
+    embed.add_field(name="Keyword", value=f"`{keyword.lower()}`", inline=True)
+    embed.add_field(name="Emoji", value=emoji, inline=True)
+    embed.set_footer(text="Bot will react whenever this keyword appears in any message.")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="removereaction")
+@commands.has_permissions(administrator=True)
+async def remove_reaction_cmd(ctx, *, keyword: str):
+    """Remove a keyword reaction rule.
+    Usage: _removereaction good job
+    """
+    result = await db_remove_reaction(keyword)
+    if result == "DELETE 0":
+        await ctx.send(f"⚠️  No reaction rule found for keyword `{keyword}`.")
+        return
+    await ctx.send(f"🗑️  Reaction rule for `{keyword}` removed.")
+
+
+@bot.command(name="listreactions")
+@commands.has_permissions(administrator=True)
+async def list_reactions_cmd(ctx):
+    """List all keyword→emoji reaction rules."""
+    rows = await db_get_all_reactions()
+    if not rows:
+        await ctx.send("📭  No reaction rules set yet. Use `_addreaction` to add one.")
+        return
+    embed = discord.Embed(title="📋  Reaction Rules", color=discord.Color.blurple())
+    for row in rows:
+        embed.add_field(name=f"`{row['keyword']}`", value=row["emoji"], inline=True)
+    await ctx.send(embed=embed)
+
+
+# ─────────────────────────────────────────────
+#  Help
+# ─────────────────────────────────────────────
+@bot.command(name="help")
 async def bot_help(ctx):
     """Show all available commands."""
     embed = discord.Embed(
-        title="🤖  Message Counter Bot — Commands",
+        title="🤖  Bot Commands",
         color=discord.Color.gold(),
-        description="All commands require **Administrator** permission unless noted."
+        description="All commands require **Administrator** permission."
     )
-    cmds = [
-        ("!addtrigger #channel N phrase",  "Add a trigger: send *phrase* every N messages in *channel*."),
-        ("!removetrigger #channel",        "Delete the trigger for a channel."),
-        ("!edittrigger #channel N phrase", "Update an existing trigger."),
-        ("!listtriggers",                  "Show all triggers with live progress."),
-        ("!resetcounter #channel",         "Reset the message counter for a channel."),
-        ("!bothelp",                       "Show this help message. (No permission needed)"),
+    embed.add_field(name="​", value="**── Message Triggers ──**", inline=False)
+    trigger_cmds = [
+        ("_addtrigger #channel N phrase",  "Send *phrase* every N messages in *channel*."),
+        ("_removetrigger #channel",        "Delete the trigger for a channel."),
+        ("_edittrigger #channel N phrase", "Update an existing trigger."),
+        ("_listtriggers",                  "Show all triggers with live progress."),
+        ("_resetcounter #channel",         "Reset the message counter for a channel."),
     ]
-    for name, desc in cmds:
+    for name, desc in trigger_cmds:
         embed.add_field(name=f"`{name}`", value=desc, inline=False)
+
+    embed.add_field(name="​", value="**── Keyword Reactions ──**", inline=False)
+    reaction_cmds = [
+        ("_addreaction emoji keyword",  "React with emoji whenever keyword appears in a message."),
+        ("_removereaction keyword",     "Remove a reaction rule."),
+        ("_listreactions",              "List all reaction rules."),
+    ]
+    for name, desc in reaction_cmds:
+        embed.add_field(name=f"`{name}`", value=desc, inline=False)
+
     await ctx.send(embed=embed)
 
 
@@ -281,7 +395,7 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("🚫  You need **Administrator** permission to use that command.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌  Missing argument: `{error.param.name}`. Type `!bothelp` for usage.")
+        await ctx.send(f"❌  Missing argument: `{error.param.name}`. Type `_help` for usage.")
     elif isinstance(error, commands.BadArgument):
         await ctx.send("❌  Invalid argument. Make sure you mention a valid channel and a number.")
     else:
