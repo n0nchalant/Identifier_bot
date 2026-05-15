@@ -18,7 +18,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.messages = True
 
-bot = commands.Bot(command_prefix="_", intents=intents)
+bot = commands.Bot(command_prefix="_", intents=intents, help_command=None)
 
 # In-memory counters (reset on restart, that's fine)
 # { channel_id: current_count }
