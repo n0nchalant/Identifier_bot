@@ -265,7 +265,7 @@ async def handle_reactions(message: discord.Message):
     for row in rows:
         keyword = row["keyword"]
         # If keyword contains "?", treat it as raw regex
-        if any(char in keyword for char in ("?", "$")):
+        if "?" in keyword:
             pattern = keyword
         else:
             pattern = r'\b' + re.escape(keyword) + r'\b'
