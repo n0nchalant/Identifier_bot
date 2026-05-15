@@ -18,7 +18,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.messages = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="_", intents=intents)
 
 # In-memory counters (reset on restart, that's fine)
 # { channel_id: current_count }
@@ -152,12 +152,12 @@ async def on_message(message):
 @bot.command(name="addtrigger")
 @commands.has_permissions(administrator=True)
 async def add_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: str):
-    """Usage: !addtrigger #channel 50 Hello everyone!"""
+    """Usage: _addtrigger #channel 50 Hello everyone!"""
     existing = await db_get_trigger(channel.id)
     if existing:
         await ctx.send(
             f"⚠️  A trigger for {channel.mention} already exists. "
-            f"Remove it first with `!removetrigger`."
+            f"Remove it first with `_removetrigger`."
         )
         return
 
@@ -180,7 +180,7 @@ async def add_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: 
 @bot.command(name="removetrigger")
 @commands.has_permissions(administrator=True)
 async def remove_trigger(ctx, channel: discord.TextChannel):
-    """Usage: !removetrigger #channel"""
+    """Usage: _removetrigger #channel"""
     result = await db_remove_trigger(channel.id)
     if result == "DELETE 0":
         await ctx.send(f"⚠️  No trigger found for {channel.mention}.")
@@ -194,7 +194,7 @@ async def remove_trigger(ctx, channel: discord.TextChannel):
 @bot.command(name="edittrigger")
 @commands.has_permissions(administrator=True)
 async def edit_trigger(ctx, channel: discord.TextChannel, count: int, *, phrase: str):
-    """Usage: !edittrigger #channel 100 New message here!"""
+    """Usage: _edittrigger #channel 100 New message here!"""
     existing = await db_get_trigger(channel.id)
     if not existing:
         await ctx.send(f"⚠️  No trigger found for {channel.mention}. Use `!addtrigger` first.")
@@ -219,7 +219,7 @@ async def list_triggers(ctx):
     rows = await db_get_all_triggers()
 
     if not rows:
-        await ctx.send("📭  No triggers configured yet. Use `!addtrigger` to add one.")
+        await ctx.send("📭  No triggers configured yet. Use `_addtrigger` to add one.")
         return
 
     embed = discord.Embed(title="📋  Active Triggers", color=discord.Color.blurple())
@@ -244,7 +244,7 @@ async def list_triggers(ctx):
 @bot.command(name="resetcounter")
 @commands.has_permissions(administrator=True)
 async def reset_counter(ctx, channel: discord.TextChannel):
-    """Usage: !resetcounter #channel"""
+    """Usage: _resetcounter #channel"""
     counters[channel.id] = 0
     new_target = random.randint(REROLL_MIN, REROLL_MAX)
     next_counts[channel.id] = new_target
@@ -252,7 +252,7 @@ async def reset_counter(ctx, channel: discord.TextChannel):
     await ctx.send(f"🔄  Counter for {channel.mention} reset. Next trigger in **{new_target}** messages.")
 
 
-@bot.command(name="bothelp")
+@bot.command(name="help")
 async def bot_help(ctx):
     """Show all available commands."""
     embed = discord.Embed(
@@ -261,12 +261,12 @@ async def bot_help(ctx):
         description="All commands require **Administrator** permission unless noted."
     )
     cmds = [
-        ("!addtrigger #channel N phrase",  "Add a trigger: send *phrase* every N messages in *channel*."),
-        ("!removetrigger #channel",        "Delete the trigger for a channel."),
-        ("!edittrigger #channel N phrase", "Update an existing trigger."),
-        ("!listtriggers",                  "Show all triggers with live progress."),
-        ("!resetcounter #channel",         "Reset the message counter for a channel."),
-        ("!bothelp",                       "Show this help message."),
+        ("_addtrigger #channel N phrase",  "Add a trigger: send *phrase* every N messages in *channel*."),
+        ("_removetrigger #channel",        "Delete the trigger for a channel."),
+        ("_edittrigger #channel N phrase", "Update an existing trigger."),
+        ("_listtriggers",                  "Show all triggers with live progress."),
+        ("_resetcounter #channel",         "Reset the message counter for a channel."),
+        ("_help",                       "Show this help message."),
     ]
     for name, desc in cmds:
         embed.add_field(name=f"`{name}`", value=desc, inline=False)
@@ -281,7 +281,7 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("🚫  You need **Administrator** permission to use that command.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌  Missing argument: `{error.param.name}`. Type `!bothelp` for usage.")
+        await ctx.send(f"❌  Missing argument: `{error.param.name}`. Type `_help` for usage.")
     elif isinstance(error, commands.BadArgument):
         await ctx.send("❌  Invalid argument. Make sure you mention a valid channel and a number.")
     else:
