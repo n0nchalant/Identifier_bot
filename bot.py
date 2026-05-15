@@ -263,7 +263,7 @@ async def handle_reactions(message: discord.Message):
     rows = await db_get_all_reactions()
     content_lower = message.content.lower()
     for row in rows:
-        if "?" in row["keyword"] or "$" in row["keyword"]:
+        if "?" in row["keyword"]:
             pattern = row["keyword"]
         else:
             pattern = r'\b' + re.escape(row["keyword"]) + r'\b'
