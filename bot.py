@@ -43,6 +43,7 @@ async def on_ready():
     if triggers_cog:
         await triggers_cog.load_from_db()
     
+    print(f"Commands in tree before sync: {[c.name for c in bot.tree.get_commands()]}")
     await bot.tree.sync(guild=discord.Object(id=929226506926960660))
     commands = await bot.tree.fetch_commands(guild=discord.Object(id=929226506926960660))
     print(f"Synced {len(commands)} commands:")
