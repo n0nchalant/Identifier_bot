@@ -78,7 +78,7 @@ class HelpCog(commands.Cog, name="Help"):
         self.bot = bot
 
     @commands.command(name="help")
-    async def bot_help(self, ctx):
+    async def show_help(self, ctx):
         """Show all bot commands, one page per feature category."""
         pages = _collect_help_pages(self.bot)
         if not pages:
