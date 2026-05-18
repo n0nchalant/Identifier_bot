@@ -673,53 +673,143 @@ async def edit_custom_cmd(ctx, name: str, *, text: str = ""):
 
 
 # ─────────────────────────────────────────────
-#  Help
+#  Help Page Data
 # ─────────────────────────────────────────────
-@bot.command(name="help")
-async def bot_help(ctx):
-    """Show all available commands."""
+
+HELP_PAGES = [
+    {
+        "title": "🤖 Bot Commands",
+        "subtitle": "📖 Role Management",
+        "fields": [
+            ("_addrole @role",    "🔒 Allow a role to use bot commands."),
+            ("_removerole @role", "🔒 Remove a role from bot access."),
+            ("_listroles",        "🔒 List all allowed roles."),
+        ]
+    },
+    {
+        "title": "🤖 Bot Commands",
+        "subtitle": "📖 Message Triggers",
+        "fields": [
+            ("_addtrigger #ch N phrase",   "🔑 Send phrase every N messages in a channel."),
+            ("_removetrigger #ch",         "🔑 Remove a channel trigger."),
+            ("_edittrigger #ch N phrase",  "🔑 Edit an existing trigger."),
+            ("_listtriggers",              "🔑 Show all triggers with progress."),
+            ("_resetcounter #ch",          "🔑 Reset a channel's message counter."),
+        ]
+    },
+    {
+        "title": "🤖 Bot Commands",
+        "subtitle": "📖 Keyword Reactions",
+        "fields": [
+            ("_addreaction emoji keyword", "🔑 React with emoji when keyword is seen."),
+            ("_removereaction keyword",    "🔑 Remove a reaction rule."),
+            ("_listreactions",             "🔑 List all reaction rules."),
+        ]
+    },
+    {
+        "title": "🤖 Bot Commands",
+        "subtitle": "📖 Custom Commands",
+        "fields": [
+            ("_addcmd name [text]",  "🔑 Create a command. Attach image/video for media."),
+            ("_editcmd name [text]", "🔑 Edit a command. Attach new file to replace media."),
+            ("_removecmd name",      "🔑 Delete a custom command."),
+            ("_listcmds",            "🌐 List all custom commands."),
+        ]
+    }
+]
+
+
+# ─────────────────────────────────────────────
+#  Help Embed Builder
+# ─────────────────────────────────────────────
+
+def build_help_embed(page: int) -> discord.Embed:
+    data = HELP_PAGES[page]
+
     embed = discord.Embed(
-        title="🤖  Bot Commands",
-        color=discord.Color.gold(),
-        description="🔒 = Admin only   |   🔑 = Admin or allowed role   |   🌐 = Everyone"
+        title=data["title"],
+        description=(
+            "🔒 = Admin only   |   "
+            "🔑 = Admin or allowed role   |   "
+            "🌐 = Everyone"
+        ),
+        color=discord.Color.gold()
     )
 
-    embed.add_field(name="​", value="**── Role Management ──**", inline=False)
-    for name, desc in [
-        ("_addrole @role",    "🔒 Allow a role to use bot commands."),
-        ("_removerole @role", "🔒 Remove a role from bot access."),
-        ("_listroles",        "🔒 List all allowed roles."),
-    ]:
-        embed.add_field(name=f"`{name}`", value=desc, inline=False)
+    embed.add_field(
+        name="​",
+        value=f"**── {data['subtitle']} ──**",
+        inline=False
+    )
 
-    embed.add_field(name="​", value="**── Message Triggers ──**", inline=False)
-    for name, desc in [
-        ("_addtrigger #ch N phrase",   "🔑 Send phrase every N messages in a channel."),
-        ("_removetrigger #ch",         "🔑 Remove a channel trigger."),
-        ("_edittrigger #ch N phrase",  "🔑 Edit an existing trigger."),
-        ("_listtriggers",              "🔑 Show all triggers with progress."),
-        ("_resetcounter #ch",          "🔑 Reset a channel's message counter."),
-    ]:
-        embed.add_field(name=f"`{name}`", value=desc, inline=False)
+    for name, desc in data["fields"]:
+        embed.add_field(
+            name=f"`{name}`",
+            value=desc,
+            inline=False
+        )
 
-    embed.add_field(name="​", value="**── Keyword Reactions ──**", inline=False)
-    for name, desc in [
-        ("_addreaction emoji keyword", "🔑 React with emoji when keyword is seen."),
-        ("_removereaction keyword",    "🔑 Remove a reaction rule."),
-        ("_listreactions",             "🔑 List all reaction rules."),
-    ]:
-        embed.add_field(name=f"`{name}`", value=desc, inline=False)
+    embed.set_footer(
+        text=f"Page {page + 1}/{len(HELP_PAGES)}"
+    )
 
-    embed.add_field(name="​", value="**── Custom Commands ──**", inline=False)
-    for name, desc in [
-        ("_addcmd name [text]",  "🔑 Create a command. Attach image/video for media."),
-        ("_editcmd name [text]", "🔑 Edit a command. Attach new file to replace media."),
-        ("_removecmd name",      "🔑 Delete a custom command."),
-        ("_listcmds",            "🌐 List all custom commands."),
-    ]:
-        embed.add_field(name=f"`{name}`", value=desc, inline=False)
+    return embed
 
-    await ctx.send(embed=embed)
+
+# ─────────────────────────────────────────────
+#  Button View
+# ─────────────────────────────────────────────
+
+class HelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.page = 0
+
+    async def update_message(self, interaction: discord.Interaction):
+        embed = build_help_embed(self.page)
+
+        self.prev_button.disabled = self.page == 0
+        self.next_button.disabled = self.page == len(HELP_PAGES) - 1
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=self
+        )
+
+    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.gray)
+    async def prev_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        self.page -= 1
+        await self.update_message(interaction)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.gray)
+    async def next_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        self.page += 1
+        await self.update_message(interaction)
+
+
+# ─────────────────────────────────────────────
+#  Help Command
+# ─────────────────────────────────────────────
+
+@bot.command(name="help")
+async def bot_help(ctx):
+    view = HelpView()
+
+    # Disable previous button initially
+    view.prev_button.disabled = True
+
+    await ctx.send(
+        embed=build_help_embed(0),
+        view=view
+    )
 
 
 # ─────────────────────────────────────────────
