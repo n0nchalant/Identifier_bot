@@ -679,11 +679,21 @@ async def edit_custom_cmd(ctx, name: str, *, text: str = ""):
 HELP_PAGES = [
     {
         "title": "🤖 Bot Commands",
-        "subtitle": "📖 Role Management",
+        "subtitle": "📖 Custom Commands",
         "fields": [
-            ("_addrole @role",    "🔒 Allow a role to use bot commands."),
-            ("_removerole @role", "🔒 Remove a role from bot access."),
-            ("_listroles",        "🔒 List all allowed roles."),
+            ("_addcmd name [text]",  "🔑 Create a command. Attach image/video for media."),
+            ("_editcmd name [text]", "🔑 Edit a command. Attach new file to replace media."),
+            ("_removecmd name",      "🔑 Delete a custom command."),
+            ("_listcmds",            "🌐 List all custom commands."),
+        ]
+    },
+    {
+        "title": "🤖 Bot Commands",
+        "subtitle": "📖 Keyword Reactions",
+        "fields": [
+            ("_addreaction emoji keyword", "🔑 React with emoji when keyword is seen."),
+            ("_removereaction keyword",    "🔑 Remove a reaction rule."),
+            ("_listreactions",             "🔑 List all reaction rules."),
         ]
     },
     {
@@ -699,21 +709,11 @@ HELP_PAGES = [
     },
     {
         "title": "🤖 Bot Commands",
-        "subtitle": "📖 Keyword Reactions",
+        "subtitle": "📖 Role Management",
         "fields": [
-            ("_addreaction emoji keyword", "🔑 React with emoji when keyword is seen."),
-            ("_removereaction keyword",    "🔑 Remove a reaction rule."),
-            ("_listreactions",             "🔑 List all reaction rules."),
-        ]
-    },
-    {
-        "title": "🤖 Bot Commands",
-        "subtitle": "📖 Custom Commands",
-        "fields": [
-            ("_addcmd name [text]",  "🔑 Create a command. Attach image/video for media."),
-            ("_editcmd name [text]", "🔑 Edit a command. Attach new file to replace media."),
-            ("_removecmd name",      "🔑 Delete a custom command."),
-            ("_listcmds",            "🌐 List all custom commands."),
+            ("_addrole @role",    "🔒 Allow a role to use bot commands."),
+            ("_removerole @role", "🔒 Remove a role from bot access."),
+            ("_listroles",        "🔒 List all allowed roles."),
         ]
     }
 ]
