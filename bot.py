@@ -42,8 +42,14 @@ async def on_ready():
     triggers_cog = bot.get_cog("Triggers")
     if triggers_cog:
         await triggers_cog.load_from_db()
+    
+    await bot.tree.sync(guild=discord.Object(id=929226506926960660))
+    commands = await bot.tree.fetch_commands(guild=discord.Object(id=929226506926960660))
+    print(f"Synced {len(commands)} commands:")
+    for cmd in commands:
+        print(f"  /{cmd.name}")
     print("─" * 40)
-
+    
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -95,15 +101,6 @@ async def main():
         for cog in COGS:
             await bot.load_extension(cog)
             print(f"🔌  Loaded cog: {cog}")
-        
-        # Sync after all cogs are loaded
-        bot.tree.clear_commands(guild=discord.Object(id=929226506926960660))
-        await bot.tree.sync(guild=discord.Object(id=929226506926960660))
-        commands = await bot.tree.fetch_commands(guild=discord.Object(id=929226506926960660))
-        print(f"Synced {len(commands)} commands:")
-        for cmd in commands:
-            print(f"  /{cmd.name}")
-
         await bot.start(token)
 
 if __name__ == "__main__":
