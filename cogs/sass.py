@@ -1,17 +1,5 @@
 """
 cogs/sass.py — Channel-wise sass rules with regex, custom probability, and custom reply.
-
-Each channel can have its own sass rule with:
-  - regex pattern  (the trigger)
-  - probability    (0.0 – 1.0)
-  - reply text
-
-Slash commands (admin/allowed-role only):
-  /sass enable   — enable sass in this channel with defaults
-  /sass disable  — disable sass in this channel
-  /sass edit     — edit pattern, probability, or reply for this channel
-  /sass info     — show current settings for this channel
-  /sass list     — list all channels with sass enabled
 """
 
 import re
@@ -23,9 +11,6 @@ from db import get_db
 from permissions import has_bot_permission
 
 
-# ─────────────────────────────────────────────
-#  Help definition (consumed by HelpCog)
-# ─────────────────────────────────────────────
 HELP_PAGE = {
     "title": "🤖 Bot Commands",
     "subtitle": "📖 Sass  (slash commands)",
@@ -38,9 +23,8 @@ HELP_PAGE = {
     ],
 }
 
-# ── Defaults ──────────────────────────────────
 DEFAULT_PATTERN     = r"^(what|when|how|where)\b|\?$"
-DEFAULT_PROBABILITY = 0.02   # 2%
+DEFAULT_PROBABILITY = 0.02
 DEFAULT_REPLY       = "apni maa se puch"
 
 
@@ -62,9 +46,7 @@ async def setup_sass_db():
 
 async def db_get_sass_rule(channel_id: int):
     conn = await get_db()
-    row = await conn.fetchrow(
-        "SELECT * FROM sass_rules WHERE channel_id = $1", channel_id
-    )
+    row = await conn.fetchrow("SELECT * FROM sass_rules WHERE channel_id = $1", channel_id)
     await conn.close()
     return row
 
@@ -89,9 +71,7 @@ async def db_save_sass_rule(channel_id: int, pattern: str, probability: float, r
 
 async def db_delete_sass_rule(channel_id: int):
     conn = await get_db()
-    result = await conn.execute(
-        "DELETE FROM sass_rules WHERE channel_id = $1", channel_id
-    )
+    result = await conn.execute("DELETE FROM sass_rules WHERE channel_id = $1", channel_id)
     await conn.close()
     return result
 
@@ -100,16 +80,52 @@ async def db_delete_sass_rule(channel_id: int):
 #  Cog
 # ─────────────────────────────────────────────
 class SassCog(commands.Cog, name="Sass"):
-    """Channel-wise sass rules triggered by regex with configurable probability."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Cache: { channel_id: (compiled_pattern, probability, reply) }
         self._cache: dict[int, tuple[re.Pattern, float, str]] = {}
+
+        # Build the group here so subcommands bind correctly
+        self.sass_group = app_commands.Group(
+            name="sass",
+            description="Manage sass rules for this channel.",
+        )
+
+        # Register subcommands manually
+        self.sass_group.add_command(app_commands.Command(
+            name="enable",
+            description="Enable sass in this channel.",
+            callback=self.sass_enable,
+        ))
+        self.sass_group.add_command(app_commands.Command(
+            name="disable",
+            description="Disable sass in this channel.",
+            callback=self.sass_disable,
+        ))
+        self.sass_group.add_command(app_commands.Command(
+            name="edit",
+            description="Edit pattern, probability, or reply for this channel.",
+            callback=self.sass_edit,
+        ))
+        self.sass_group.add_command(app_commands.Command(
+            name="info",
+            description="Show sass settings for this channel.",
+            callback=self.sass_info,
+        ))
+        self.sass_group.add_command(app_commands.Command(
+            name="list",
+            description="List all channels with sass enabled.",
+            callback=self.sass_list,
+        ))
+
+        bot.tree.add_command(self.sass_group)
 
     async def cog_load(self):
         await setup_sass_db()
         await self._reload_cache()
+
+    async def cog_unload(self):
+        self.bot.tree.remove_command("sass")
 
     async def _reload_cache(self):
         rows = await db_get_all_sass_rules()
@@ -121,7 +137,6 @@ class SassCog(commands.Cog, name="Sass"):
             except re.error:
                 print(f"⚠️  Invalid sass regex for channel {row['channel_id']}, skipping.")
 
-    # ── Called from bot's on_message ──────────
     async def handle_message(self, message: discord.Message):
         rule = self._cache.get(message.channel.id)
         if not rule:
@@ -129,14 +144,6 @@ class SassCog(commands.Cog, name="Sass"):
         pattern, probability, reply = rule
         if pattern.search(message.content) and random.random() < probability:
             await message.reply(reply)
-
-    # ─────────────────────────────────────────
-    #  Slash command group
-    # ─────────────────────────────────────────
-    sass_group = app_commands.Group(
-        name="sass",
-        description="Manage sass rules for this channel.",
-    )
 
     async def _check_permission(self, interaction: discord.Interaction) -> bool:
         if not isinstance(interaction.user, discord.Member):
@@ -148,13 +155,8 @@ class SassCog(commands.Cog, name="Sass"):
         )
         return False
 
-    # ── /sass enable ──────────────────────────
-    @sass_group.command(name="enable", description="Enable sass in this channel.")
-    @app_commands.describe(
-        pattern="Regex pattern to match (default: questions starting with what/when/how/where or ending with ?)",
-        probability="Trigger probability as a percentage, e.g. 2 for 2% (default: 2)",
-        reply="Reply text (default: apni maa se puch)",
-    )
+    # ── Subcommand callbacks ──────────────────
+
     async def sass_enable(
         self,
         interaction: discord.Interaction,
@@ -164,57 +166,36 @@ class SassCog(commands.Cog, name="Sass"):
     ):
         if not await self._check_permission(interaction):
             return
-
         try:
             compiled = re.compile(pattern, re.IGNORECASE)
         except re.error as e:
-            await interaction.response.send_message(
-                f"❌  Invalid regex pattern: `{e}`", ephemeral=True
-            )
+            await interaction.response.send_message(f"❌ Invalid regex: `{e}`", ephemeral=True)
             return
-
         if not (0 <= probability <= 100):
-            await interaction.response.send_message(
-                "❌  Probability must be between 0 and 100.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ Probability must be 0–100.", ephemeral=True)
             return
 
         prob_float = probability / 100
         await db_save_sass_rule(interaction.channel_id, pattern, prob_float, reply)
         self._cache[interaction.channel_id] = (compiled, prob_float, reply)
 
-        embed = discord.Embed(title="✅  Sass Enabled", color=discord.Color.green())
+        embed = discord.Embed(title="✅ Sass Enabled", color=discord.Color.green())
         embed.add_field(name="Channel", value=interaction.channel.mention, inline=True)
         embed.add_field(name="Probability", value=f"{probability}%", inline=True)
         embed.add_field(name="Pattern", value=f"`{pattern}`", inline=False)
         embed.add_field(name="Reply", value=reply, inline=False)
         await interaction.response.send_message(embed=embed)
 
-    # ── /sass disable ─────────────────────────
-    @sass_group.command(name="disable", description="Disable sass in this channel.")
     async def sass_disable(self, interaction: discord.Interaction):
         if not await self._check_permission(interaction):
             return
-
         result = await db_delete_sass_rule(interaction.channel_id)
         self._cache.pop(interaction.channel_id, None)
-
         if result == "DELETE 0":
-            await interaction.response.send_message(
-                "⚠️  Sass is not enabled in this channel.", ephemeral=True
-            )
+            await interaction.response.send_message("⚠️ Sass is not enabled here.", ephemeral=True)
             return
-        await interaction.response.send_message(
-            f"🗑️  Sass disabled in {interaction.channel.mention}."
-        )
+        await interaction.response.send_message(f"🗑️ Sass disabled in {interaction.channel.mention}.")
 
-    # ── /sass edit ────────────────────────────
-    @sass_group.command(name="edit", description="Edit pattern, probability, or reply for this channel.")
-    @app_commands.describe(
-        pattern="New regex pattern (leave blank to keep current)",
-        probability="New probability as a percentage 0–100 (leave blank to keep current)",
-        reply="New reply text (leave blank to keep current)",
-    )
     async def sass_edit(
         self,
         interaction: discord.Interaction,
@@ -224,13 +205,9 @@ class SassCog(commands.Cog, name="Sass"):
     ):
         if not await self._check_permission(interaction):
             return
-
         existing = await db_get_sass_rule(interaction.channel_id)
         if not existing:
-            await interaction.response.send_message(
-                "⚠️  Sass is not enabled in this channel. Use `/sass enable` first.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("⚠️ Sass not enabled here. Use `/sass enable` first.", ephemeral=True)
             return
 
         new_pattern = pattern if pattern is not None else existing["pattern"]
@@ -240,56 +217,37 @@ class SassCog(commands.Cog, name="Sass"):
         try:
             compiled = re.compile(new_pattern, re.IGNORECASE)
         except re.error as e:
-            await interaction.response.send_message(
-                f"❌  Invalid regex pattern: `{e}`", ephemeral=True
-            )
-            return
-
-        if not (0 <= new_prob <= 1):
-            await interaction.response.send_message(
-                "❌  Probability must be between 0 and 100.", ephemeral=True
-            )
+            await interaction.response.send_message(f"❌ Invalid regex: `{e}`", ephemeral=True)
             return
 
         await db_save_sass_rule(interaction.channel_id, new_pattern, new_prob, new_reply)
         self._cache[interaction.channel_id] = (compiled, new_prob, new_reply)
 
-        embed = discord.Embed(title="✏️  Sass Updated", color=discord.Color.blue())
+        embed = discord.Embed(title="✏️ Sass Updated", color=discord.Color.blue())
         embed.add_field(name="Channel", value=interaction.channel.mention, inline=True)
         embed.add_field(name="Probability", value=f"{new_prob * 100:.1f}%", inline=True)
         embed.add_field(name="Pattern", value=f"`{new_pattern}`", inline=False)
         embed.add_field(name="Reply", value=new_reply, inline=False)
         await interaction.response.send_message(embed=embed)
 
-    # ── /sass info ────────────────────────────
-    @sass_group.command(name="info", description="Show sass settings for this channel.")
     async def sass_info(self, interaction: discord.Interaction):
         existing = await db_get_sass_rule(interaction.channel_id)
         if not existing:
-            await interaction.response.send_message(
-                "📭  Sass is not enabled in this channel.", ephemeral=True
-            )
+            await interaction.response.send_message("📭 Sass is not enabled here.", ephemeral=True)
             return
-
-        embed = discord.Embed(title="ℹ️  Sass Settings", color=discord.Color.gold())
+        embed = discord.Embed(title="ℹ️ Sass Settings", color=discord.Color.gold())
         embed.add_field(name="Channel", value=interaction.channel.mention, inline=True)
         embed.add_field(name="Probability", value=f"{existing['probability'] * 100:.1f}%", inline=True)
         embed.add_field(name="Pattern", value=f"`{existing['pattern']}`", inline=False)
         embed.add_field(name="Reply", value=existing["reply"], inline=False)
         await interaction.response.send_message(embed=embed)
 
-    # ── /sass list ────────────────────────────
-    @sass_group.command(name="list", description="List all channels with sass enabled.")
     async def sass_list(self, interaction: discord.Interaction):
         rows = await db_get_all_sass_rules()
         if not rows:
-            await interaction.response.send_message(
-                "📭  No sass rules set up yet. Use `/sass enable` in a channel.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("📭 No sass rules yet. Use `/sass enable`.", ephemeral=True)
             return
-
-        embed = discord.Embed(title="📋  Sass Rules", color=discord.Color.blurple())
+        embed = discord.Embed(title="📋 Sass Rules", color=discord.Color.blurple())
         for row in rows:
             channel = self.bot.get_channel(row["channel_id"])
             cname = channel.mention if channel else f"Unknown ({row['channel_id']})"
