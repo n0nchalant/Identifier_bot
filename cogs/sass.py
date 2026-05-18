@@ -306,6 +306,4 @@ class SassCog(commands.Cog, name="Sass"):
 
 
 async def setup(bot: commands.Bot):
-    cog = SassCog(bot)
-    await bot.add_cog(cog)
-    bot.tree.add_command(cog.sass_group)
+    await bot.add_cog(SassCog(bot))
