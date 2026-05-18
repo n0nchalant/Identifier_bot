@@ -38,21 +38,15 @@ COGS = [
 async def on_ready():
     print(f"✅  Logged in as {bot.user} ({bot.user.id})")
     print("─" * 40)
-
     await setup_all_tables()
-
     # Let the triggers cog pre-load its state from DB
     triggers_cog = bot.get_cog("Triggers")
     if triggers_cog:
         await triggers_cog.load_from_db()
-
-    # Sync slash commands globally(currently set to local)
     # Temporary hard resync - remove after it works
-bot.tree.clear_commands(guild=discord.Object(id= 929226506926960660))
-await bot.tree.sync(guild=discord.Object(id=929226506926960660))
-print("✅  Slash commands synced")
-  
-
+    bot.tree.clear_commands(guild=discord.Object(id=929226506926960660))
+    await bot.tree.sync(guild=discord.Object(id=929226506926960660))
+    print("✅  Slash commands synced")
     print("─" * 40)
 
 
