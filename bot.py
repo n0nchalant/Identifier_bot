@@ -39,19 +39,9 @@ async def on_ready():
     print(f"✅  Logged in as {bot.user} ({bot.user.id})")
     print("─" * 40)
     await setup_all_tables()
-    # Let the triggers cog pre-load its state from DB
     triggers_cog = bot.get_cog("Triggers")
     if triggers_cog:
         await triggers_cog.load_from_db()
-    # Temporary hard resync
-    bot.tree.clear_commands(guild=discord.Object(id=929226506926960660))
-    await bot.tree.sync(guild=discord.Object(id=929226506926960660))
-    # Debug - see what actually got synced
-    commands = await bot.tree.fetch_commands(guild=discord.Object(id=929226506926960660))
-    print(f"Synced {len(commands)} commands:")
-    for cmd in commands:
-        print(f"  /{cmd.name}")
-    print("✅  Slash commands synced")
     print("─" * 40)
 
 @bot.event
@@ -105,8 +95,16 @@ async def main():
         for cog in COGS:
             await bot.load_extension(cog)
             print(f"🔌  Loaded cog: {cog}")
-        await bot.start(token)
+        
+        # Sync after all cogs are loaded
+        bot.tree.clear_commands(guild=discord.Object(id=929226506926960660))
+        await bot.tree.sync(guild=discord.Object(id=929226506926960660))
+        commands = await bot.tree.fetch_commands(guild=discord.Object(id=929226506926960660))
+        print(f"Synced {len(commands)} commands:")
+        for cmd in commands:
+            print(f"  /{cmd.name}")
 
+        await bot.start(token)
 
 if __name__ == "__main__":
     token = os.environ.get("BOT_TOKEN", "")
