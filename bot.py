@@ -47,8 +47,11 @@ async def on_ready():
         await triggers_cog.load_from_db()
 
     # Sync slash commands globally(currently set to local)
-    await bot.tree.sync(guild=discord.Object(id=929226506926960660))
-    print("✅  Slash commands synced")
+    # Temporary hard resync - remove after it works
+bot.tree.clear_commands(guild=discord.Object(id= 929226506926960660))
+await bot.tree.sync(guild=discord.Object(id=929226506926960660))
+print("✅  Slash commands synced")
+  
 
     print("─" * 40)
 
