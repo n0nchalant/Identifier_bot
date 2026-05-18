@@ -43,12 +43,16 @@ async def on_ready():
     triggers_cog = bot.get_cog("Triggers")
     if triggers_cog:
         await triggers_cog.load_from_db()
-    # Temporary hard resync - remove after it works
+    # Temporary hard resync
     bot.tree.clear_commands(guild=discord.Object(id=929226506926960660))
     await bot.tree.sync(guild=discord.Object(id=929226506926960660))
+    # Debug - see what actually got synced
+    commands = await bot.tree.fetch_commands(guild=discord.Object(id=929226506926960660))
+    print(f"Synced {len(commands)} commands:")
+    for cmd in commands:
+        print(f"  /{cmd.name}")
     print("✅  Slash commands synced")
     print("─" * 40)
-
 
 @bot.event
 async def on_message(message: discord.Message):
