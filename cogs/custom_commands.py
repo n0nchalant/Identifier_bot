@@ -1,9 +1,5 @@
 """
-cogs/custom_commands.py — User-defined text/media commands with usage tracking.
-
-Each command records:
-  - who added it (user ID + display name)
-  - how many times it has been used
+cogs/custom_commands.py — User-defined text/media commands with in-memory cache.
 """
 import discord
 from discord.ext import commands
@@ -14,10 +10,6 @@ from db import (
 )
 from permissions import bot_permission_check
 
-
-# ─────────────────────────────────────────────
-#  Help definition (consumed by HelpCog)
-# ─────────────────────────────────────────────
 HELP_PAGE = {
     "title": "🤖 Bot Commands",
     "subtitle": "📖 Custom Commands",
@@ -32,29 +24,35 @@ HELP_PAGE = {
 
 
 class CustomCommandsCog(commands.Cog, name="Custom Commands"):
-    """Create, edit, remove, and trigger custom text/media commands."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Cache: { name: row_dict }
+        self._cache: dict[str, dict] = {}
 
-    # ── Called from bot's on_message ──────────
+    async def cog_load(self):
+        await self._reload_cache()
+
+    async def _reload_cache(self):
+        rows = await db_get_all_custom_commands()
+        self._cache = {row["name"]: dict(row) for row in rows}
+
     async def handle_message(self, message: discord.Message):
-        """Fire a custom command if the message matches _{name}."""
         if not message.content.startswith("_"):
             return
 
         cmd_name = message.content[1:].split()[0].lower()
 
-        # Skip built-in commands
         if cmd_name in self.bot.all_commands:
             return
 
-        row = await db_get_custom_command(cmd_name)
+        row = self._cache.get(cmd_name)
         if not row:
             return
 
-        # Increment use counter
-        await db_increment_use_count(cmd_name)
+        # Increment use counter in DB (async, don't await to keep response fast)
+        self.bot.loop.create_task(db_increment_use_count(cmd_name))
+        self._cache[cmd_name]["use_count"] = row.get("use_count", 0) + 1
 
         text      = row["text"]
         media_url = row["media_url"]
@@ -67,19 +65,10 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
         elif media_url:
             await message.channel.send(media_url)
 
-    # ── Commands ──────────────────────────────
-
     @commands.command(name="addcmd")
     @bot_permission_check()
     async def add_custom_cmd(self, ctx, name: str, *, text: str = ""):
-        """Create a custom command that replies with text and/or an attached file.
-
-        Usage (text only):    _addcmd rules Please read the rules!
-        Usage (media only):   _addcmd meme   [attach image, no text needed]
-        Usage (text + media): _addcmd welcome Hello! [attach image]
-        """
         name = name.lower()
-
         if name in self.bot.all_commands:
             await ctx.send(f"❌  `_{name}` is a built-in command and cannot be overridden.")
             return
@@ -97,6 +86,7 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
             added_by=ctx.author.id,
             added_by_name=str(ctx.author),
         )
+        await self._reload_cache()
 
         embed = discord.Embed(title="✅  Custom Command Saved", color=discord.Color.green())
         embed.add_field(name="Command", value=f"`_{name}`", inline=True)
@@ -111,33 +101,29 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
     @commands.command(name="removecmd")
     @bot_permission_check()
     async def remove_custom_cmd(self, ctx, name: str):
-        """Delete a custom command.
-        Usage: _removecmd rules
-        """
         result = await db_delete_custom_command(name)
         if result == "DELETE 0":
             await ctx.send(f"⚠️  No custom command found with name `_{name}`.")
             return
+        self._cache.pop(name.lower(), None)
         await ctx.send(f"🗑️  Custom command `_{name}` deleted.")
 
     @commands.command(name="listcmds")
     async def list_custom_cmds(self, ctx):
-        """List all custom commands. Available to everyone."""
-        rows = await db_get_all_custom_commands()
-        if not rows:
+        if not self._cache:
             await ctx.send("📭  No custom commands yet. Admins can use `_addcmd` to add one.")
             return
 
         embed = discord.Embed(title="📋  Custom Commands", color=discord.Color.blurple())
-        for row in rows:
+        for name, row in self._cache.items():
             parts = []
             if row["text"]:
                 parts.append("📝 Text")
             if row["media_url"]:
                 parts.append("🖼️ Media")
             embed.add_field(
-                name=f"`_{row['name']}`",
-                value=f"{' + '.join(parts)}  •  used **{row['use_count']}×**",
+                name=f"`_{name}`",
+                value=f"{' + '.join(parts)}  •  used **{row.get('use_count', 0)}×**",
                 inline=True,
             )
         embed.set_footer(text="Type the command to use it! | Use _cmdinfo <name> for details.")
@@ -146,11 +132,8 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
     @commands.command(name="editcmd")
     @bot_permission_check()
     async def edit_custom_cmd(self, ctx, name: str, *, text: str = ""):
-        """Edit an existing custom command. Attach a new file to replace media.
-        Usage: _editcmd rules Updated rules text here  [optionally attach new image]
-        """
         name = name.lower()
-        existing = await db_get_custom_command(name)
+        existing = self._cache.get(name)
         if not existing:
             await ctx.send(f"⚠️  No custom command `_{name}` found. Use `_addcmd` to create it.")
             return
@@ -160,9 +143,8 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
             media_url = ctx.message.attachments[0].url
 
         new_text = text or existing["text"]
-
-        # Preserve original author on edit
         await db_save_custom_command(name, new_text, media_url)
+        await self._reload_cache()
 
         embed = discord.Embed(title="✏️  Custom Command Updated", color=discord.Color.blue())
         embed.add_field(name="Command", value=f"`_{name}`", inline=True)
@@ -175,37 +157,26 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
 
     @commands.command(name="cmdinfo")
     async def cmd_info(self, ctx, name: str):
-        """Show who added a command and how many times it's been used.
-        Usage: _cmdinfo rules
-        """
         name = name.lower()
-        row = await db_get_custom_command(name)
+        row = self._cache.get(name)
         if not row:
             await ctx.send(f"⚠️  No custom command `_{name}` found.")
             return
 
-        embed = discord.Embed(
-            title=f"ℹ️  Command Info: `_{name}`",
-            color=discord.Color.gold(),
-        )
-
-        # Added by
-        if row["added_by"]:
+        embed = discord.Embed(title=f"ℹ️  Command Info: `_{name}`", color=discord.Color.gold())
+        if row.get("added_by"):
             member = ctx.guild.get_member(row["added_by"])
-            added_by_display = member.mention if member else row["added_by_name"] or f"User ID {row['added_by']}"
+            added_by_display = member.mention if member else row.get("added_by_name") or f"User ID {row['added_by']}"
         else:
-            added_by_display = "Unknown (added before tracking)"
+            added_by_display = "Unknown"
         embed.add_field(name="Added by", value=added_by_display, inline=True)
-
-        embed.add_field(name="Times used", value=f"**{row['use_count']}×**", inline=True)
-
+        embed.add_field(name="Times used", value=f"**{row.get('use_count', 0)}×**", inline=True)
         parts = []
         if row["text"]:
             parts.append("📝 Text")
         if row["media_url"]:
             parts.append("🖼️ Media")
         embed.add_field(name="Content", value=" + ".join(parts) if parts else "—", inline=True)
-
         await ctx.send(embed=embed)
 
 
