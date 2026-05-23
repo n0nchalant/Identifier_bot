@@ -1,10 +1,11 @@
 """
 cogs/custom_commands.py — User-defined text/media commands with in-memory cache.
+Cache is updated directly on add/edit/remove — no DB reload needed.
 """
 import discord
 from discord.ext import commands
 from db import (
-    db_get_custom_command, db_get_all_custom_commands,
+    db_get_all_custom_commands,
     db_save_custom_command, db_delete_custom_command,
     db_increment_use_count,
 )
@@ -50,7 +51,7 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
         if not row:
             return
 
-        # Increment use counter in DB (async, don't await to keep response fast)
+        # Increment use counter in background — doesn't slow down response
         self.bot.loop.create_task(db_increment_use_count(cmd_name))
         self._cache[cmd_name]["use_count"] = row.get("use_count", 0) + 1
 
@@ -86,7 +87,16 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
             added_by=ctx.author.id,
             added_by_name=str(ctx.author),
         )
-        await self._reload_cache()
+
+        # Update cache directly — no DB reload
+        self._cache[name] = {
+            "name": name,
+            "text": text or None,
+            "media_url": media_url,
+            "added_by": ctx.author.id,
+            "added_by_name": str(ctx.author),
+            "use_count": 0,
+        }
 
         embed = discord.Embed(title="✅  Custom Command Saved", color=discord.Color.green())
         embed.add_field(name="Command", value=f"`_{name}`", inline=True)
@@ -101,11 +111,14 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
     @commands.command(name="removecmd")
     @bot_permission_check()
     async def remove_custom_cmd(self, ctx, name: str):
+        name = name.lower()
         result = await db_delete_custom_command(name)
         if result == "DELETE 0":
             await ctx.send(f"⚠️  No custom command found with name `_{name}`.")
             return
-        self._cache.pop(name.lower(), None)
+
+        # Remove from cache directly
+        self._cache.pop(name, None)
         await ctx.send(f"🗑️  Custom command `_{name}` deleted.")
 
     @commands.command(name="listcmds")
@@ -144,7 +157,10 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
 
         new_text = text or existing["text"]
         await db_save_custom_command(name, new_text, media_url)
-        await self._reload_cache()
+
+        # Update cache directly — no DB reload
+        self._cache[name]["text"] = new_text
+        self._cache[name]["media_url"] = media_url
 
         embed = discord.Embed(title="✏️  Custom Command Updated", color=discord.Color.blue())
         embed.add_field(name="Command", value=f"`_{name}`", inline=True)

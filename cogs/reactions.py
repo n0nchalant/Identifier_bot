@@ -1,5 +1,6 @@
 """
 cogs/reactions.py — Keyword → emoji auto-reaction with in-memory cache.
+Cache is updated directly on add/remove — no DB reload needed.
 """
 import re
 import discord
@@ -22,7 +23,7 @@ class ReactionsCog(commands.Cog, name="Reactions"):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Cache: [ { keyword, emoji, compiled_pattern } ]
+        # Cache: [ { keyword, emoji, pattern } ]
         self._cache: list[dict] = []
 
     async def cog_load(self):
@@ -54,10 +55,20 @@ class ReactionsCog(commands.Cog, name="Reactions"):
     @commands.command(name="addreaction")
     @bot_permission_check()
     async def add_reaction_cmd(self, ctx, emoji: str, *, keyword: str):
-        await db_add_reaction(keyword, emoji)
-        await self._reload_cache()
+        keyword_lower = keyword.lower()
+        await db_add_reaction(keyword_lower, emoji)
+
+        # Update cache directly — no DB reload
+        # Remove existing entry for this keyword if present
+        self._cache = [r for r in self._cache if r["keyword"] != keyword_lower]
+        try:
+            pattern = re.compile(r'\b' + re.escape(keyword_lower) + r'\b', re.IGNORECASE)
+            self._cache.append({"keyword": keyword_lower, "emoji": emoji, "pattern": pattern})
+        except re.error:
+            pass
+
         embed = discord.Embed(title="✅  Reaction Rule Added", color=discord.Color.green())
-        embed.add_field(name="Keyword", value=f"`{keyword.lower()}`", inline=True)
+        embed.add_field(name="Keyword", value=f"`{keyword_lower}`", inline=True)
         embed.add_field(name="Emoji", value=emoji, inline=True)
         embed.set_footer(text="Bot will react whenever this exact word appears in a message.")
         await ctx.send(embed=embed)
@@ -65,11 +76,14 @@ class ReactionsCog(commands.Cog, name="Reactions"):
     @commands.command(name="removereaction")
     @bot_permission_check()
     async def remove_reaction_cmd(self, ctx, *, keyword: str):
-        result = await db_remove_reaction(keyword)
+        keyword_lower = keyword.lower()
+        result = await db_remove_reaction(keyword_lower)
         if result == "DELETE 0":
             await ctx.send(f"⚠️  No reaction rule found for keyword `{keyword}`.")
             return
-        await self._reload_cache()
+
+        # Remove from cache directly
+        self._cache = [r for r in self._cache if r["keyword"] != keyword_lower]
         await ctx.send(f"🗑️  Reaction rule for `{keyword}` removed.")
 
     @commands.command(name="listreactions")
