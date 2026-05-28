@@ -127,20 +127,29 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
             await ctx.send("📭  No custom commands yet. Admins can use `_addcmd` to add one.")
             return
 
-        embed = discord.Embed(title="📋  Custom Commands", color=discord.Color.blurple())
-        for name, row in self._cache.items():
-            parts = []
-            if row["text"]:
-                parts.append("📝 Text")
-            if row["media_url"]:
-                parts.append("🖼️ Media")
-            embed.add_field(
-                name=f"`_{name}`",
-                value=f"{' + '.join(parts)}  •  used **{row.get('use_count', 0)}×**",
-                inline=True,
+        items = list(self._cache.items())
+        total = len(items)
+        page_size = 25
+        pages = [items[i:i + page_size] for i in range(0, total, page_size)]
+
+        for page_num, page in enumerate(pages, 1):
+            embed = discord.Embed(
+                title=f"📋  Custom Commands  ({page_num}/{len(pages)})",
+                color=discord.Color.blurple()
             )
-        embed.set_footer(text="Type the command to use it! | Use _cmdinfo <name> for details.")
-        await ctx.send(embed=embed)
+            for name, row in page:
+                parts = []
+                if row["text"]:
+                    parts.append("📝 Text")
+                if row["media_url"]:
+                    parts.append("🖼️ Media")
+                embed.add_field(
+                    name=f"`_{name}`",
+                    value=f"{' + '.join(parts)}  •  used **{row.get('use_count', 0)}×**",
+                    inline=True,
+                )
+            embed.set_footer(text=f"Showing {len(page)} of {total} commands  |  Use _cmdinfo <name> for details.")
+            await ctx.send(embed=embed)
 
     @commands.command(name="editcmd")
     @bot_permission_check()
