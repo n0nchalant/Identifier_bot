@@ -124,32 +124,12 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
     @commands.command(name="listcmds")
     async def list_custom_cmds(self, ctx):
         if not self._cache:
-            await ctx.send("📭  No custom commands yet. Admins can use `_addcmd` to add one.")
+            await ctx.send("No custom commands yet. Admins can use _addcmd to add one.")
             return
 
-        items = list(self._cache.items())
-        total = len(items)
-        page_size = 25
-        pages = [items[i:i + page_size] for i in range(0, total, page_size)]
-
-        for page_num, page in enumerate(pages, 1):
-            embed = discord.Embed(
-                title=f"📋  Custom Commands  ({page_num}/{len(pages)})",
-                color=discord.Color.blurple()
-            )
-            for name, row in page:
-                parts = []
-                if row["text"]:
-                    parts.append("📝 Text")
-                if row["media_url"]:
-                    parts.append("🖼️ Media")
-                embed.add_field(
-                    name=f"`_{name}`",
-                    value=f"{' + '.join(parts)}  •  used **{row.get('use_count', 0)}×**",
-                    inline=True,
-                )
-            embed.set_footer(text=f"Showing {len(page)} of {total} commands  |  Use _cmdinfo <name> for details.")
-            await ctx.send(embed=embed)
+        names = sorted(self._cache.keys())
+        view = CmdListView(names)
+        await ctx.send(embed=view.build_embed(), view=view)
 
     @commands.command(name="editcmd")
     @bot_permission_check()
@@ -203,6 +183,45 @@ class CustomCommandsCog(commands.Cog, name="Custom Commands"):
             parts.append("🖼️ Media")
         embed.add_field(name="Content", value=" + ".join(parts) if parts else "—", inline=True)
         await ctx.send(embed=embed)
+
+
+
+class CmdListView(discord.ui.View):
+    PAGE_SIZE = 25
+
+    def __init__(self, names: list[str]):
+        super().__init__(timeout=120)
+        self.names = names
+        self.page = 0
+        self.total_pages = max(1, (len(names) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_button.disabled = self.page == 0
+        self.next_button.disabled = self.page >= self.total_pages - 1
+
+    def build_embed(self) -> discord.Embed:
+        start = self.page * self.PAGE_SIZE
+        chunk = self.names[start:start + self.PAGE_SIZE]
+        embed = discord.Embed(
+            title="Custom Commands",
+            description="\n".join(f"`_{name}`" for name in chunk),
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=f"Page {self.page + 1}/{self.total_pages}  |  {len(self.names)} commands total")
+        return embed
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.gray)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page -= 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.gray)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page += 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
 async def setup(bot: commands.Bot):
