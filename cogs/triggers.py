@@ -58,8 +58,6 @@ class TriggersCog(commands.Cog, name="Triggers"):
         target = self.next_counts.get(cid, trigger["next_count"])
         current = self.counters[cid]
 
-        print(f"[#{message.channel.name}] {current}/{target}")
-
         if current >= target:
             self.counters[cid] = 0
             new_target = random.randint(REROLL_MIN, REROLL_MAX)

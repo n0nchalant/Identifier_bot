@@ -1,7 +1,5 @@
 """
 bot.py — Entry point. Loads all cogs and wires shared events.
-Each feature lives in its own cog under cogs/. Adding a new feature
-means creating a new cog file — nothing here needs to change.
 """
 import os
 import sys
@@ -20,13 +18,13 @@ intents.messages = True
 
 bot = commands.Bot(command_prefix="_", intents=intents, help_command=None)
 
-# Cogs to load (order matters for help page ordering)
 COGS = [
     "cogs.custom_commands",
     "cogs.reactions",
     "cogs.triggers",
     "cogs.roles",
     "cogs.sass",
+    "cogs.leveling",
     "cogs.help",
 ]
 
@@ -42,22 +40,16 @@ async def on_ready():
     triggers_cog = bot.get_cog("Triggers")
     if triggers_cog:
         await triggers_cog.load_from_db()
-    
-    print(f"Commands in tree before sync: {[c.name for c in bot.tree.get_commands()]}")
     await bot.tree.sync()
-    commands = await bot.tree.fetch_commands()
-    print(f"Synced {len(commands)} commands globally:")
-    for cmd in commands:
-        print(f"  /{cmd.name}")
     print("─" * 40)
-    
+
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         await bot.process_commands(message)
         return
 
-    # Delegate to each feature cog's handle_message
     triggers_cog = bot.get_cog("Triggers")
     if triggers_cog:
         await triggers_cog.handle_message(message)
@@ -74,13 +66,17 @@ async def on_message(message: discord.Message):
     if sass_cog:
         await sass_cog.handle_message(message)
 
+    leveling_cog = bot.get_cog("Leveling")
+    if leveling_cog:
+        await leveling_cog.handle_message(message)
+
     await bot.process_commands(message)
 
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
-        return  # custom commands handle unknown input
+        return
     if isinstance(error, commands.CheckFailure):
         await ctx.send("🚫  You don't have permission to use that command.")
     elif isinstance(error, commands.MissingPermissions):
@@ -100,8 +96,11 @@ async def on_command_error(ctx, error):
 async def main():
     async with bot:
         for cog in COGS:
-            await bot.load_extension(cog)
-            print(f"🔌  Loaded cog: {cog}")
+            try:
+                await bot.load_extension(cog)
+                print(f"🔌  Loaded cog: {cog}")
+            except Exception as e:
+                print(f"❌  Failed to load cog {cog}: {e}")
         await bot.start(token)
 
 if __name__ == "__main__":
