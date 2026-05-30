@@ -164,10 +164,29 @@ class LevelingCog(commands.Cog, name="Leveling"):
         self._cooldowns: dict[tuple, float] = {}
         # Level roles cache: { guild_id: { level: role_id } }
         self._level_roles: dict[int, dict[int, int]] = {}
+        # XP cache: { (guild_id, user_id): xp }
+        self._xp_cache: dict[tuple, int] = {}
+        # Username cache: { (guild_id, user_id): username }
+        self._username_cache: dict[tuple, str] = {}
 
     async def cog_load(self):
         await setup_leveling_db()
         await self._reload_level_roles()
+        await self._load_xp_cache()
+
+    async def _load_xp_cache(self):
+        """Load all XP data into memory on startup."""
+        conn = await get_db()
+        rows = await conn.fetch("SELECT guild_id, user_id, xp, username FROM user_xp")
+        await conn.close()
+        self._xp_cache.clear()
+        self._username_cache.clear()
+        for row in rows:
+            key = (row["guild_id"], row["user_id"])
+            self._xp_cache[key] = row["xp"]
+            if row["username"]:
+                self._username_cache[key] = row["username"]
+        print(f"📊  Loaded {len(self._xp_cache)} XP records into cache")
 
     async def _reload_level_roles(self):
         """Load level roles for all guilds into cache."""
@@ -253,9 +272,19 @@ class LevelingCog(commands.Cog, name="Leveling"):
 
         self._cooldowns[key] = now
         xp_gain = random.randint(XP_MIN, XP_MAX)
+        key = (message.guild.id, message.author.id)
 
-        old_xp = await db_get_xp(message.guild.id, message.author.id)
-        new_xp = await db_add_xp(message.guild.id, message.author.id, xp_gain, message.author.display_name)
+        old_xp = self._xp_cache.get(key, 0)
+        new_xp = old_xp + xp_gain
+
+        # Update cache instantly
+        self._xp_cache[key] = new_xp
+        self._username_cache[key] = message.author.display_name
+
+        # Update DB in background — doesn't slow down response
+        self.bot.loop.create_task(
+            db_add_xp(message.guild.id, message.author.id, xp_gain, message.author.display_name)
+        )
 
         old_level = level_from_xp(old_xp)
         new_level = level_from_xp(new_xp)
@@ -271,7 +300,7 @@ class LevelingCog(commands.Cog, name="Leveling"):
         Usage: _rank  or  _rank @user
         """
         member = member or ctx.author
-        xp = await db_get_xp(ctx.guild.id, member.id)
+        xp = self._xp_cache.get((ctx.guild.id, member.id), 0)
         level = level_from_xp(xp)
         current_threshold = xp_for_level(level)
         next_threshold = xp_for_level(level + 1)
