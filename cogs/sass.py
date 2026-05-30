@@ -33,11 +33,6 @@ HELP_PAGE = {
     ],
 }
 
-DEFAULT_PATTERN     = r"^(what|when|how|where)\b|\?$"
-DEFAULT_PROBABILITY = 0.02
-DEFAULT_REPLY       = "apni maa se puch"
-
-
 # ─────────────────────────────────────────────
 #  DB helpers
 # ─────────────────────────────────────────────
@@ -170,9 +165,9 @@ async def _check_perm(interaction: discord.Interaction) -> bool:
 )
 async def sass_enable(
     interaction: discord.Interaction,
-    pattern: str = DEFAULT_PATTERN,
-    probability: float = 2.0,
-    reply: str = DEFAULT_REPLY,
+    pattern: str,
+    probability: float,
+    reply: str,
 ):
     if not await _check_perm(interaction):
         return
