@@ -13,22 +13,23 @@ Rules:
 import random
 import time
 import discord
+from discord import app_commands
 from discord.ext import commands
 from db import get_db
-from permissions import bot_permission_check
+from permissions import bot_permission_check, has_bot_permission
 
 
 HELP_PAGE = {
     "title": "🤖 Bot Commands",
     "subtitle": "📖 Leveling",
     "fields": [
-        ("_rank [user]",           "🌐 Show your (or another user's) level and XP."),
-        ("_leaderboard",           "🌐 Top 10 users by XP."),
-        ("_addlevelrole N @role",  "🔑 Assign a role at level N."),
-        ("_removelevelrole N",     "🔑 Remove the role assigned at level N."),
-        ("_listlevelroles",        "🔑 List all level → role mappings."),
-        ("_setxp @user N",         "🔒 Manually set a user's XP."),
-        ("_resetxp @user",         "🔒 Reset a user's XP to 0."),
+        ("_rank [user]",              "🌐 Show your (or another user's) level and XP."),
+        ("_leaderboard",              "🌐 Top 10 users by XP."),
+        ("/addlevelrole level role",  "🔑 Assign a role at a level (slash command)."),
+        ("/removelevelrole level",    "🔑 Remove the role at a level (slash command)."),
+        ("/listlevelroles",           "🔑 List all level → role mappings (slash command)."),
+        ("_setxp @user N",            "🔒 Manually set a user's XP."),
+        ("_resetxp @user",            "🔒 Reset a user's XP to 0."),
     ],
 }
 
@@ -198,9 +199,17 @@ class LevelingCog(commands.Cog, name="Leveling"):
     def _get_level_roles(self, guild_id: int) -> dict[int, int]:
         return self._level_roles.get(guild_id, {})
 
-    async def _handle_level_up(self, member: discord.Member, old_level: int, new_level: int):
+    async def _handle_level_up(self, member: discord.Member, old_level: int, new_level: int, channel: discord.TextChannel = None):
         """Assign new level role, remove old one. Skips if user has a higher role manually."""
         level_roles = self._get_level_roles(member.guild.id)
+
+        # Always send level up message in the channel the user last messaged in
+        if channel:
+            await channel.send(
+                f"{member.display_name} reached level {new_level}!",
+                allowed_mentions=discord.AllowedMentions.none()
+            )
+
         if not level_roles:
             return
 
@@ -254,7 +263,7 @@ class LevelingCog(commands.Cog, name="Leveling"):
             channel = next((c for c in member.guild.text_channels if c.permissions_for(member.guild.me).send_messages), None)
         if channel:
             await channel.send(
-                f"Level up! {member.display_name} reached level {new_level} and was awarded the {target_role.name} role.",
+                f"{member.display_name} has been awarded the {target_role.name} role!",
                 allowed_mentions=discord.AllowedMentions.none()
             )
 
@@ -290,7 +299,7 @@ class LevelingCog(commands.Cog, name="Leveling"):
         new_level = level_from_xp(new_xp)
 
         if new_level > old_level:
-            await self._handle_level_up(message.author, old_level, new_level)
+            await self._handle_level_up(message.author, old_level, new_level, message.channel)
 
     # ── Commands ──────────────────────────────
 
@@ -471,5 +480,78 @@ class LeaderboardView(discord.ui.View):
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
+
+# ─────────────────────────────────────────────
+#  Slash commands for level roles
+# ─────────────────────────────────────────────
+levelrole = app_commands.Group(name="levelrole", description="Manage automatic level roles.")
+
+
+async def _check_perm(interaction: discord.Interaction) -> bool:
+    if not isinstance(interaction.user, discord.Member):
+        return False
+    if await has_bot_permission(interaction.user):
+        return True
+    await interaction.response.send_message(
+        "🚫  You don't have permission to use this command.", ephemeral=True
+    )
+    return False
+
+
+@levelrole.command(name="add", description="Assign a role when a user reaches a level.")
+@app_commands.describe(level="The level to assign the role at", role="The role to assign")
+async def levelrole_add(interaction: discord.Interaction, level: int, role: discord.Role):
+    if not await _check_perm(interaction):
+        return
+    if level < 1:
+        await interaction.response.send_message("Level must be at least 1.", ephemeral=True)
+        return
+    await db_add_level_role(interaction.guild.id, level, role.id)
+    cog = interaction.client.get_cog("Leveling")
+    if cog:
+        cog._level_roles.setdefault(interaction.guild.id, {})[level] = role.id
+    embed = discord.Embed(title="Level Role Added", color=discord.Color.green())
+    embed.add_field(name="Level", value=str(level), inline=True)
+    embed.add_field(name="Role", value=role.mention, inline=True)
+    embed.add_field(name="XP needed", value=f"{xp_for_level(level):,}", inline=True)
+    embed.set_footer(text="Users who reach this level will automatically receive this role.")
+    await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+@levelrole.command(name="remove", description="Remove the role assigned at a level.")
+@app_commands.describe(level="The level to remove the role from")
+async def levelrole_remove(interaction: discord.Interaction, level: int):
+    if not await _check_perm(interaction):
+        return
+    result = await db_remove_level_role(interaction.guild.id, level)
+    cog = interaction.client.get_cog("Leveling")
+    if cog:
+        cog._level_roles.get(interaction.guild.id, {}).pop(level, None)
+    if result == "DELETE 0":
+        await interaction.response.send_message(f"No role assigned at level {level}.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"Level role for level {level} removed.")
+
+
+@levelrole.command(name="list", description="List all level → role mappings.")
+async def levelrole_list(interaction: discord.Interaction):
+    cog = interaction.client.get_cog("Leveling")
+    level_roles = cog._get_level_roles(interaction.guild.id) if cog else {}
+    if not level_roles:
+        await interaction.response.send_message("No level roles set. Use /levelrole add to add one.", ephemeral=True)
+        return
+    embed = discord.Embed(title="Level Roles", color=discord.Color.blurple())
+    for level in sorted(level_roles.keys()):
+        role = interaction.guild.get_role(level_roles[level])
+        rname = role.mention if role else f"Unknown role ({level_roles[level]})"
+        embed.add_field(
+            name=f"Level {level}",
+            value=f"{rname}\n{xp_for_level(level):,} XP needed",
+            inline=True
+        )
+    await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(LevelingCog(bot))
+    bot.tree.add_command(levelrole)
